@@ -1,4 +1,3 @@
-
 import argparse
 from Bio import SeqIO, AlignIO
 from transformers import BertTokenizer, BertModel, T5Tokenizer, T5ForConditionalGeneration, AutoTokenizer, AutoModel, AutoConfig
@@ -57,22 +56,11 @@ class ProteinMutationEnv(gym.Env):
         self.mutstate =  [0] * len(self.possible_mutations)
         self.head_mask = head_mask
         print("possible_mutations", self.possible_mutations)
-        #print("mustate", self.mutstate)
-        #self.best_seqsim, self.tot_attns = self.calculate_reward(self.initial_ids, self.target_ids, self.model, self.tokenizer, self.device)
-        #self.best_seqsim = starting_seqsim
-        #self.starting_seqsim = starting_seqsim
-
-        #self.lowest_mse_self = starting_mse_self
-        #self.starting_mse_self = starting_mse_self
 
         self.int_limits = int_limits
         self.int_ids = int_ids
-        #self.lowest_mse_int = starting_mse_int
-        #self.starting_mse_int = starting_mse_int
 
-        #self.starting_intface = starting_intface
         # Define action and observation space
-
         self.action_space = spaces.Discrete(len(self.possible_mutations))
         self.observation_space = spaces.Box(low=0, high=1, shape=(len(self.mutstate),), dtype=np.float32)
         self.current_ids = self.orig_ids.clone().detach()
@@ -80,25 +68,15 @@ class ProteinMutationEnv(gym.Env):
  
         # Set up initial sequence similarities, mse's, and target attentions and embeddings 
         # Happens once per episode, but all could be calculated beforehand. 
-        # Anyway fast on GPU
- 
+        # Anyway fast on GPU 
         orig_seq_tmp, orig_mask =  create_substitution_mask(self.mutstate, self.possible_mutations)
         target_seq_tmp, self.target_mask =  create_substitution_mask(self.mutstate, [(y, x) for x, y in self.possible_mutations])
-        #print("MASKS") 
-        #print(orig_seq_tmp)
-        #print(orig_mask)
-        #print(target_seq_tmp)
-        #print(self.target_mask)
-        #print(sum(orig_mask))
-        #print(sum(self.target_mask))
 
         with torch.no_grad():
 
             # Adding orig to self, because could potentially also evaluate on similarity to the original sequence. 
             self.orig_mean_embedding, self.orig_attns = get_representation(self.model, self.orig_ids.unsqueeze(0), "t5", layers = [-1], output_attentions = True, head_mask = self.head_mask)
             self.target_mean_embedding, self.target_attns = get_representation(self.model, self.target_ids.unsqueeze(0), "t5", layers = [-1], output_attentions = True, head_mask = self.head_mask)
-
-
 
             self.starting_seqsim = F.cosine_similarity(self.orig_mean_embedding.to(device), target_mean_embedding.to(device)).item()
             self.best_seqsim = self.starting_seqsim
@@ -127,9 +105,6 @@ class ProteinMutationEnv(gym.Env):
                 orig_int_attns_trim = trim_attns(attns = orig_int_attns, query_ids = self.orig_ids, query_int_ids = orig_int_ids, int_ids = self.int_ids, spacer_len = spacer_len, int_limits = self.int_limits)
 
                 self.orig_int_attns_trim = filter_distance_heads(self.orig_int_attns_trim)
-
-
-
 
                 target_int_embeddings, target_int_attns = get_representation(self.model, target_int_ids, "t5", layers = [-1], output_attentions = True, head_mask = self.head_mask)   
                 self.target_int_attns_trim = trim_attns(attns = target_int_attns, query_ids = self.target_ids, query_int_ids = target_int_ids, int_ids = self.int_ids, spacer_len = spacer_len, int_limits = self.int_limits)
@@ -181,44 +156,12 @@ class ProteinMutationEnv(gym.Env):
  
         seqsim = F.cosine_similarity(current_mean_embedding.to(device), self.target_mean_embedding.to(device)).item()
  
-        # Reshape and expand the masks to match the dimensions of your tensors
-        # needs to be a function
-        #len_current = current_attns.shape[3] # use shape instead of len
-        #current_mask_a = torch.Tensor(current_mask).view(1, 1, len_current, 1).expand(-1, -1, -1, len_current)
-        #current_mask_b = torch.Tensor(current_mask).view(1, 1, 1, len_current).expand(-1, -1, len_current, -1)
- 
-        # Combine the masks (logical AND)
-        #combined_current_mask = (current_mask_a * current_mask_b) == 1
-        #print(combined_current_mask)
-        #print(combined_current_mask.all())
-        #combined_current_mask = combined_current_mask.expand_as(current_attns)
-        #filtered_current = current_attns[combined_current_mask]
-
-
-        #print(filtered_current.shape, current_attns.shape, combined_current_mask.shape)
-
-        # Compute MSE
-        #print(current_mask)
-        #print(self.target_mask)
-        #print(current_attns.shape)
-        #print(self.target_attns.shape)
 
         current_attns_aln =  filter_w_mask(current_attns, torch.tensor(current_mask, device = device))
         #target_attns_aln =  filter_w_mask(self.target_attns, torch.tensor(self.target_mask, device = device))
         assert current_attns_aln.shape == self.target_attns_aln.shape, "Aligned attentions must be the same shape"
         mse_self = torch.mean((self.target_attns_aln -  current_attns_aln) ** 2).item()
-        #mse_self= np.mean((target_attns_aln.cpu().numpy() - current_attns_aln.cpu().numpy()) ** 2).mean()
 
-        #print("mse_test", mse_test)
-        # Why would I sum here, just losing resolution?
-        #target_attns_arr = np.sum(target_attns.cpu().numpy(), axis=(2, 3))
-        #current_attns_arr = np.sum(current_attns.cpu().numpy(), axis=(2, 3))
-        #mse_self = np.mean((target_attns_arr - current_attns_arr) ** 2)
-        #Need a mask for target and current, where only positions that are in both are compared
-        #mse_self = np.mean((self.target_attns.cpu().numpy() - current_attns.cpu().numpy()) ** 2)
-        #print("mse_self", mse_self)
-
-        #int_limits = [9, 109]
 
         if self.int_limits:
             spacer_len = 100
@@ -238,23 +181,7 @@ class ProteinMutationEnv(gym.Env):
 
             #target_int_attns_trim = trim_attns(attns = target_int_attns, query_int_ids = target_int_ids, int_ids = int_ids, spacer_len = spacer_len, int_limits = int_limits)
             current_int_attns_trim = trim_attns(attns = current_int_attns, query_ids = self.current_ids, query_int_ids = current_int_ids, int_ids = int_ids, spacer_len = spacer_len, int_limits = int_limits)
-            #current_int_attns_trim = attn_stats(current_int_attns_trim, outfile_base)
-
-            #aggregated_target_arr = np.sum(target_int_attns_trim.cpu().numpy(), axis=(2, 3))
-            #aggregated_current_arr = np.sum(current_int_attns_trim.cpu().numpy(), axis=(2, 3))
-
-
-            #mse_int = np.mean((aggregated_target_arr - aggregated_orig_arr) ** 2)
-            #print("Int attentions shape, is it seqlen x int_limits_len?")
-            # No, it's layers x yeads x int_limits_len x int_limits_len
-            # This isn't right then, since it should be seqlen (aln) x int_limits_len
-            #print(self.target_int_attns_trim.shape)
-            #print(current_int_attns_trim.shape)
             mse_int = torch.mean((self.target_int_attns_trim - current_int_attns_trim) ** 2).item()
-            #mse_int = np.mean((self.target_int_attns_trim.cpu().numpy() - current_int_attns_trim.cpu().numpy()) ** 2)
-            #print("mse", mse_int)
-
-       
             #print("best seqsim", self.best_seqsim, "mse_int", mse_int, "mse_self", mse_self)
 
             # Better     
@@ -276,9 +203,6 @@ class ProteinMutationEnv(gym.Env):
         # Worse
         else:
            reward_mse_self = 0
-        #print(reward_mse_self)
-
-
 
         reward_ss = seqsim - self.best_seqsim
 
@@ -470,13 +394,42 @@ class PrioritizedReplayBuffer:
         return [self.buffer[idx] for idx in chosen_indices]
 
 
+class MABTracker:
+    def __init__(self, q_value_dict = {}):
+        self.action_counts = 0
+              
+
+    def update_q_values(self, action, reward, step):
+        #step_size = 1.0 / step
+        #self.q_value_dict[action] += step_size * (reward - self.q_value_dict[action])
+
+        # So you get more bonus for taking a good action earlier
+        self.q_value_dict[action] += (1 / step) * (reward - self.q_value_dict[action])
+
+
+
+    def print_q_rewards(self):
+        # Print cumulative rewards for each action
+        for action, q_value in self.q_value.items():
+            print(f"Action {action} {possible_mutations[action]}: Cumulative Reward = {cumulative_reward}")
+
+    def q_table(self):
+        intermediate2 = [(x, possible_mutations[x][0], y) for x, y in  list(self.q_value_dict.items())]
+        df = pd.DataFrame(intermediate2, columns =['action', 'aa1', 'q_value'])
+        return df
+
+
+
+
 
 class ActionValueTracker:
 
-    def __init__(self):
+    def __init__(self, cumulative_rewards = {}):
         self.cumulative_rewards = {}
         self.action_counts = {}
         self.step_log = []
+
+    
 
     def update(self, action, reward, episode, step):
  
@@ -757,6 +710,9 @@ def filter_w_mask(tensor_attns, tensor_mask):
         return(filtered_tensor)
 
 
+
+
+
 def create_substitution_mask(mutstate, actions):
 
     # Initialize output sequence and mask
@@ -809,8 +765,43 @@ def create_substitution_mask(mutstate, actions):
 
 
 
+# get rank based on current Q-value
+
+actions = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
 
 
+
+
+
+
+
+# Probability of moving an action earlier
+
+
+
+move_earlier_prob = 0.3  # 30% chance
+
+
+
+
+
+
+
+# Process each action starting from the second one
+
+
+def get_neworder(actions, move_earlier_prob = 0.2):
+    for i in range(1, len(actions)):
+
+        if random.random() < move_earlier_prob:
+
+            # Randomly choose a new position that is earlier than the current one
+            new_position = random.randint(0, i-1)
+
+            # Move the action to its new position
+            actions.insert(new_position, actions.pop(i))
+
+    return(actions)
 
 
 def parse_arguments():
@@ -1442,9 +1433,15 @@ if __name__ == "__main__":
     batch_size = 64 
 
 
+
+
+
+
     
     
     # Training Loop
+    # Start with N rounds of random mutations to get cumulative rewards per mut with markov
+    # Then M rounds of mutations in order of markov derived q table. 
     for episode in range(num_episodes):
         print("Start episode, ", episode)
         print(tracker.print_cumulative_rewards())
@@ -1457,7 +1454,6 @@ if __name__ == "__main__":
         done = False
    
         current_action_space = list(range(env.action_space.n))
-        #print("current action space", current_action_space)
         previous_actions = []
         while not done:
           valid_action_found = False
@@ -1472,11 +1468,7 @@ if __name__ == "__main__":
                 q_values = q_network(state)
                 action_values = tracker.get_action_values()
                 action = torch.argmax(q_values).item()  # Exploit
-                #print("action", action)
-            #else:
-            #    action_values = tracker.get_action_values()
-            #    action = max(action_values, key=action_values.get)
-            #print("previous actions", previous_actions)
+
             if action not in previous_actions:
                 valid_action_found = True
                 previous_actions.append(action)
@@ -1512,6 +1504,97 @@ if __name__ == "__main__":
           # Add experience to the prioritized replay buffer
           experience = (next_ids, action, reward, next_state, done, success_metric)
           replay_buffer.add(experience)
+
+          #print("Episode", episode) 
+          if counter ==0:
+                  q_network.eval()
+                  with torch.no_grad():
+                      q_values_check = q_network(torch.tensor(mutstate, dtype=torch.float32).to(device)) 
+                  q_network.train()
+                  df_mutannot['q'] = q_values_check.clone().detach().cpu() # detach necessary or not?
+                  print("Episode", episode) 
+                  print(df_mutannot.merge(cumulative_rewards_df, how = "left", on = ["action", "aa1"]).sort_values(by='cumulative_reward', ascending=False).head(100))
+ 
+
+    ####################################
+    #
+    # Get the step log    
+    step_log = tracker.get_step_log()
+    print(step_log)
+    # Aggregate cumulative rewards by episode and action
+    #total_rewards = step_log.groupby(['action'])['reward'].sum().reset_index(name='total_reward')
+    total_rewards = step_log
+    # Rank the actions within each episode
+    # The sample(frac = 1) randomly sorts the dataframe so that mutations with tied rewards will be done in a random order
+    total_rewards['rank'] = total_rewards.sample(frac=1).groupby('episode')['cumulative_reward'].rank(method='first', ascending=False)
+    
+    # Sort the DataFrame for better readability
+    total_rewards.sort_values(by=['episode', 'rank'], inplace=True)
+    
+    # Display the resulting DataFrame
+    print("total rewards", total_rewards)
+    
+    # Save this DataFrame to a CSV file
+    total_rewards.to_csv('action_rankings_per_total.csv', index=False)
+
+
+    # Filter the DataFrame to only the final episode
+    # Or the episode with the largest area under the curve?
+    post_markov = total_rewards[total_rewards['episode'] == num_episodes]
+    print("POST MARKOV")
+    print(post_markov)
+
+
+    current_action_space = post_markov['action'].tolist()
+    q_values = [x/num_episodes for x in post_markov['cumulative_rewards'].tolist()]
+
+    q_value_dict = dict(zip(current_action_space, q_values)) 
+
+    print(q_value_dict)
+    tracker_mab = MABTracker(q_value_dict = q_value_dict)
+
+    ####################################
+    # Now for the Multi Armed Bandit part
+
+    for episode in range(num_episodes):
+        print("Start episode, ", episode)
+        print(tracker_mab.print_q_values())
+          
+        counter = 0
+        mutstate = env.reset()
+        mutstate = torch.tensor(mutstate, dtype=torch.float32).clone().detach().to(device)
+        done = False
+   
+        #current_action_space = list(range(env.action_space.n))
+        previous_actions = []
+
+        action_sequence = get_neworder(current_action_space)
+
+        for action in action_sequence:
+
+          if int_fasta_file:
+             next_ids, reward, mutstate, best_seqsim, lowest_mse_self, lowest_mse_int, done, _ = env.step(action)
+          else:
+             next_ids, reward, mutstate, best_seqsim, lowest_mse_self,  done, _ = env.step(action)
+
+          next_state = mutstate
+          tracker_mab.update_q_values(action, reward, step = counter)
+          counter = counter + 1
+          tracker_mab.print_q_values()
+          #d ef update_q_values(self, action, reward):
+
+          if len(current_action_space) == 0:
+              done = True
+
+   
+          # Add experience to the prioritized replay buffer
+          experience = (next_ids, action, reward, next_state, done, success_metric)
+          replay_buffer.add(experience)
+
+
+
+
+
   
           # Here is where we track successes? 
   
@@ -1603,35 +1686,12 @@ if __name__ == "__main__":
 
 
 
-    # Get the step log
-    
-    step_log = tracker.get_step_log()
-    print(step_log)
-    # Aggregate cumulative rewards by episode and action
-    #total_rewards = step_log.groupby(['action'])['reward'].sum().reset_index(name='total_reward')
-    total_rewards = step_log
-    # Rank the actions within each episode
-    # The sample(frac = 1) randomly sorts the dataframe so that mutations with tied rewards will be done in a random order
-    total_rewards['rank'] = total_rewards.sample(frac=1).groupby('episode')['cumulative_reward'].rank(method='first', ascending=False)
-    
-    # Sort the DataFrame for better readability
-    total_rewards.sort_values(by=['episode', 'rank'], inplace=True)
-    
-    # Display the resulting DataFrame
-    print("total rewards", total_rewards)
-    
-    # Save this DataFrame to a CSV file
-    total_rewards.to_csv('action_rankings_per_total.csv', index=False)
-
-
     # Rank the actions within each episode
     #step_log['rank'] = step_log.groupby('episode')['reward'].rank(method='dense', ascending=False)
     
     #step_log.to_csv('action_rankings_per_episode.csv', index=False)
     
-   
-    
-    
+      
     def apply_actions_in_order(actions, possible_mutations, target_ids, model, tokenizer, device, int_ids = torch.tensor([]), spacer_len = 0, int_limits = [], head_mask = None):
         #block_1 = time()
         #func_time = time()
