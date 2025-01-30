@@ -16,5 +16,5 @@ module load clustal-omega/1.2.4
 
 f=/groups/clairemcwhite/claire_workspace/github/meaningconversion/fastas/msp.fasta
 
-python /groups/clairemcwhite/claire_workspace/github/meaningconversion/scripts/seqtransform_az.py -m /groups/clairemcwhite/models/prot_t5_xl_uniref50/ -f $f --optimization-method beam --look-ahead 5 --max_steps 30 -e 5
+python /groups/clairemcwhite/claire_workspace/github/meaningconversion/scripts/seqtransform_az.py -m /groups/clairemcwhite/models/prot_t5_xl_uniref50/ -f $f --optimization-method beam --look-ahead 5 --max_steps 30 -e 100 --n_subsamples 10 --subsample_size 20
 

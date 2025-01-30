@@ -2194,6 +2194,101 @@ def plot_iterative_beam_search_progress(iteration_results, output_dir, original_
                 bbox_inches='tight')
     plt.close()
 
+def plot_mutation_phases(step_log, pathway_df, output_dir, original_seqsims, iteration_results=None):
+    """
+    Create a figure showing exploration and optimization phases, with optional refinement phase.
+    
+    Args:
+        step_log: DataFrame containing raw exploration results
+        pathway_df: DataFrame containing optimized pathways
+        output_dir: Directory to save output
+        original_seqsims: Original sequence similarities for reference
+        iteration_results: Optional list of results from iterative beam search
+    """
+    # Determine number of subplots based on whether iteration_results is provided
+    n_plots = 3 if iteration_results is not None else 2
+    fig, axes = plt.subplots(1, n_plots, figsize=(6*n_plots, 6))
+    
+    # 1. Exploration Phase (Mutation Trajectories)
+    episodes = step_log['episode'].unique()
+    for episode in episodes:
+        episode_data = step_log[step_log['episode'] == episode]
+        axes[0].plot(range(len(episode_data)), 
+                    episode_data['similarity_score'].values,
+                    color='lightgray', 
+                    alpha=0.5,
+                    linewidth=1)
+    axes[0].set_title('Phase 1: Exploration\n(All Mutation Trajectories)')
+    axes[0].set_xlabel('Mutation Order')
+    axes[0].set_ylabel('Sequence Similarity')
+    axes[0].grid(True, linestyle='--', alpha=0.3)
+    
+    # 2. Optimization Phase (Pathway Progressions)
+    # Plot original pathways in light gray
+    for _, pathway in pathway_df.iterrows():
+        full_progression = [original_seqsims[0]] + list(pathway['seqsim_progression'])
+        steps = range(len(full_progression))
+        axes[1].plot(steps, 
+                    full_progression,
+                    color='lightgray', 
+                    alpha=0.3,
+                    linewidth=1)
+    
+    # Plot best original path in black dashed line
+    best_original = pathway_df.nlargest(1, 'final_auc').iloc[0]
+    full_progression = [original_seqsims[0]] + list(best_original['seqsim_progression'])
+    steps = range(len(full_progression))
+    axes[1].plot(steps,
+                full_progression,
+                color='black',
+                linewidth=2,
+                linestyle='--',
+                label='Best Path')
+    axes[1].set_title('Phase 2: Optimization\n(Selected Pathways)')
+    axes[1].set_xlabel('Mutation Order')
+    axes[1].set_ylabel('Sequence Similarity')
+    axes[1].grid(True, linestyle='--', alpha=0.3)
+    axes[1].legend()
+    
+    # 3. Refinement Phase (if iteration_results provided)
+    if iteration_results is not None:
+        # Plot original sequence
+        steps = range(len(original_seqsims))
+        axes[2].plot(steps,
+                    original_seqsims,
+                    color='black',
+                    linewidth=2,
+                    linestyle='--',
+                    label='Original Best',
+                    zorder=1)
+        
+        # Plot each iteration with different colors
+        cmap = plt.cm.viridis(np.linspace(0, 1, len(iteration_results)))
+        for idx, result in enumerate(iteration_results):
+            full_progression = [original_seqsims[0]] + list(result['seqsims'])
+            steps = range(len(full_progression))
+            axes[2].plot(steps,
+                        full_progression,
+                        color=cmap[idx],
+                        linewidth=2,
+                        label=f'Iteration {result["iteration"]}',
+                        zorder=2+idx)
+        
+        axes[2].set_title('Phase 3: Refinement\n(Beam Search Iterations)')
+        axes[2].set_xlabel('Mutation Order')
+        axes[2].set_ylabel('Sequence Similarity')
+        axes[2].grid(True, linestyle='--', alpha=0.3)
+        axes[2].legend()
+    
+    # Adjust layout and save
+    plt.tight_layout()
+    plt.savefig(f'{output_dir}/mutation_phases_comparison.png',
+                dpi=300,
+                bbox_inches='tight')
+    plt.savefig(f'{output_dir}/mutation_phases_comparison.pdf',
+                bbox_inches='tight')
+    plt.close()
+
 if __name__ == "__main__":
     args = parse_arguments()
     
@@ -2319,34 +2414,15 @@ if __name__ == "__main__":
     plt.savefig(f'{output_dir}/consensus_mutation_graph.png', bbox_inches='tight', dpi=300)
     plt.close()
     print(args.n_best_paths)
+    
+   
     # Optimize pathways
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    if args.optimization_method in ['original', 'both']:
-        print("\nPerforming original window-based optimization...")
-        best_path, optimization_results = optimize_best_pathways(
-            pathway_df=pathway_df,
-            target_ids=target_ids,
-            model=model,
-            tokenizer=tokenizer,
-            device=device,
-            n_best=args.n_best_paths,
-            window_size=args.window_size,
-            beam_width=args.beam_width
-        )
-
-        # Save optimization results
-        optimization_df = pd.DataFrame([optimization_results])
-        optimization_df.to_csv(f'{output_dir}/original_optimization_results_{timestamp}.csv', index=False)
-
-        # Plot original optimization results
-        plot_pathway_comparison(pathway_df, optimization_results, output_dir, starting_seqsim)
-
     if args.optimization_method in ['beam', 'both']:
         # Calculate original progressions early
         original_seqsims, original_aucs = get_original_progressions(pathway_df, starting_seqsim)
         
-       
         # Run iterative beam search
         iteration_results, best_path, best_score = iterative_beam_search(
             pathway_df=pathway_df,
@@ -2363,6 +2439,9 @@ if __name__ == "__main__":
             original_aucs=original_aucs
         )
         
+        # Create three-panel plot including beam search results
+        plot_mutation_phases(step_log, pathway_df, output_dir, original_seqsims, iteration_results)
+        
         # Save iteration results
         iteration_df = pd.DataFrame([{
             'iteration': r['iteration'],
@@ -2370,6 +2449,11 @@ if __name__ == "__main__":
             'best_path': r['best_path']
         } for r in iteration_results])
         iteration_df.to_csv(f'{output_dir}/beam_search_iterations_{timestamp}.csv', index=False)
+
+
+    else:
+        plot_mutation_phases(step_log, pathway_df, output_dir, original_seqsims)
+ 
 
     print("\nOptimization complete!")
     if args.optimization_method == 'both':
