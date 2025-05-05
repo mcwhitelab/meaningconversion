@@ -114,7 +114,7 @@ class ProteinMutationEnv(gym.Env):
     sequence and other criteria.
     """
 
-    def __init__(self, orig_ids, target_ids, possible_mutations,  model, tokenizer, device, baseline_aucs = []):
+    def __init__(self, orig_ids, target_ids, possible_mutations,  model, tokenizer, device, baseline_aucs = [], baseline_reward=False, starting_seqsim=None):
 
         super(ProteinMutationEnv, self).__init__()
         self.orig_ids = orig_ids
@@ -128,6 +128,8 @@ class ProteinMutationEnv(gym.Env):
         self.latest_reward = 0  
         self.mutstate =  [0] * len(self.possible_mutations)
         self.baseline_aucs = baseline_aucs
+        self.baseline_reward = baseline_reward
+        self.starting_seqsim = starting_seqsim
         print("possible_mutations", self.possible_mutations)
 
         self.seqsim_history = []
@@ -448,11 +450,11 @@ def apply_actions_in_order(actions, possible_mutations, target_ids, model, token
             tokens = tokenizer(sequences[-1], return_tensors="pt", padding=True, truncation=True).to(device)
             
             with torch.no_grad():
-                encoder_output = model.encoder(
-                    input_ids=tokens["input_ids"],
-                    output_attentions=False
-                )
-                current_embedding = torch.mean(encoder_output.hidden_states[-1], dim=1)
+                current_embedding = get_representation(model, 
+                                                     tokens["input_ids"], 
+                                                     "t5",  # Note: Should pass model_type instead of hardcoding
+                                                     layers=[-1], 
+                                                     output_attentions=False)
                 similarity = F.cosine_similarity(current_embedding, target_mean_embedding)
                 similarities.append(float(similarity.cpu().numpy()))
         else:
@@ -657,12 +659,21 @@ def parse_arguments():
                       default=3,
                       help='Number of beam search iterations to perform (default: 3)')
         
+    # Add baseline reward flag
+    parser.add_argument('--baseline-reward',
+                       action='store_true',
+                       help='Only give positive rewards for improvements above the original sequence similarity')
 
     # Add max_steps argument
     parser.add_argument('--max_steps', 
                        type=int,
                        default=None,
                        help='Maximum number of mutation steps to optimize. If not specified, optimizes full path')
+    
+    # Add new argument for reference sequences
+    parser.add_argument("-ref", "--reference_fasta", 
+                       type=str, 
+                       help="Path to FASTA file containing reference sequences to plot")
     
     return parser.parse_args()
 
@@ -2194,20 +2205,22 @@ def plot_iterative_beam_search_progress(iteration_results, output_dir, original_
                 bbox_inches='tight')
     plt.close()
 
-def plot_mutation_phases(step_log, pathway_df, output_dir, original_seqsims, iteration_results=None):
+def plot_mutation_phases(step_log, pathway_df, output_dir, original_seqsims, iteration_results=None, reference_seqs=None):
     """
     Create a figure showing exploration and optimization phases, with optional refinement phase.
-    
-    Args:
-        step_log: DataFrame containing raw exploration results
-        pathway_df: DataFrame containing optimized pathways
-        output_dir: Directory to save output
-        original_seqsims: Original sequence similarities for reference
-        iteration_results: Optional list of results from iterative beam search
     """
     # Determine number of subplots based on whether iteration_results is provided
-    n_plots = 3 if iteration_results is not None else 2
+    n_plots = 4  # Always include reference panel
     fig, axes = plt.subplots(1, n_plots, figsize=(6*n_plots, 6))
+    
+    # Plot reference sequences if provided
+    print(reference_seqs)
+    if reference_seqs is not None:  # Changed from if reference_seqs:
+        for name, sim_score in reference_seqs.items():
+            # Add horizontal line across first three subplots
+            for ax in axes[:-1]:  # Exclude last panel
+                ax.axhline(y=sim_score, color='green', linestyle=':', alpha=0.5,
+                          label=f'Reference: {name}')
     
     # 1. Exploration Phase (Mutation Trajectories)
     episodes = step_log['episode'].unique()
@@ -2224,7 +2237,6 @@ def plot_mutation_phases(step_log, pathway_df, output_dir, original_seqsims, ite
     axes[0].grid(True, linestyle='--', alpha=0.3)
     
     # 2. Optimization Phase (Pathway Progressions)
-    # Plot original pathways in light gray
     for _, pathway in pathway_df.iterrows():
         full_progression = [original_seqsims[0]] + list(pathway['seqsim_progression'])
         steps = range(len(full_progression))
@@ -2234,7 +2246,6 @@ def plot_mutation_phases(step_log, pathway_df, output_dir, original_seqsims, ite
                     alpha=0.3,
                     linewidth=1)
     
-    # Plot best original path in black dashed line
     best_original = pathway_df.nlargest(1, 'final_auc').iloc[0]
     full_progression = [original_seqsims[0]] + list(best_original['seqsim_progression'])
     steps = range(len(full_progression))
@@ -2248,11 +2259,9 @@ def plot_mutation_phases(step_log, pathway_df, output_dir, original_seqsims, ite
     axes[1].set_xlabel('Mutation Order')
     axes[1].set_ylabel('Sequence Similarity')
     axes[1].grid(True, linestyle='--', alpha=0.3)
-    axes[1].legend()
     
     # 3. Refinement Phase (if iteration_results provided)
     if iteration_results is not None:
-        # Plot original sequence
         steps = range(len(original_seqsims))
         axes[2].plot(steps,
                     original_seqsims,
@@ -2262,7 +2271,6 @@ def plot_mutation_phases(step_log, pathway_df, output_dir, original_seqsims, ite
                     label='Original Best',
                     zorder=1)
         
-        # Plot each iteration with different colors
         cmap = plt.cm.viridis(np.linspace(0, 1, len(iteration_results)))
         for idx, result in enumerate(iteration_results):
             full_progression = [original_seqsims[0]] + list(result['seqsims'])
@@ -2279,14 +2287,52 @@ def plot_mutation_phases(step_log, pathway_df, output_dir, original_seqsims, ite
         axes[2].set_ylabel('Sequence Similarity')
         axes[2].grid(True, linestyle='--', alpha=0.3)
         axes[2].legend()
+    else:
+        axes[2].set_visible(False)  # Hide if no iteration results
     
+    # 4. Reference Sequences Panel
+    if reference_seqs is not None:  # Changed from if reference_seqs:
+        # Sort reference sequences by similarity score
+        sorted_refs = dict(sorted(reference_seqs.items(), key=lambda x: x[1], reverse=True))
+        
+        # Create bar plot of reference sequence similarities
+        names = list(sorted_refs.keys())
+        scores = list(sorted_refs.values())
+        
+        # Create bar plot
+        bars = axes[3].bar(range(len(names)), scores, color='lightgreen')
+        
+        # Customize the plot
+        axes[3].set_title('Reference Sequences\nSimilarity Scores')
+        axes[3].set_xlabel('Reference Sequences')
+        axes[3].set_ylabel('Sequence Similarity')
+        
+        # Rotate x-axis labels for better readability
+        axes[3].set_xticks(range(len(names)))
+        axes[3].set_xticklabels(names, rotation=45, ha='right')
+        
+        # Add value labels on top of bars
+        for bar in bars:
+            height = bar.get_height()
+            axes[3].text(bar.get_x() + bar.get_width()/2., height,
+                        f'{height:.3f}',
+                        ha='center', va='bottom')
+        
+        # Add grid for better readability
+        axes[3].grid(True, linestyle='--', alpha=0.3, axis='y')
+        
+        # Set y-axis limits to match other panels
+        axes[3].set_ylim(0, 1.0)
+    else:
+        axes[3].text(0.5, 0.5, 'No reference\nsequences provided',
+                    ha='center', va='center',
+                    transform=axes[3].transAxes)
+        axes[3].set_title('Reference Sequences')
+
     # Adjust layout and save
     plt.tight_layout()
-    plt.savefig(f'{output_dir}/mutation_phases_comparison.png',
-                dpi=300,
-                bbox_inches='tight')
-    plt.savefig(f'{output_dir}/mutation_phases_comparison.pdf',
-                bbox_inches='tight')
+    plt.savefig(f'{output_dir}/mutation_phases_analysis.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{output_dir}/mutation_phases_analysis.pdf', bbox_inches='tight')
     plt.close()
 
 if __name__ == "__main__":
@@ -2320,6 +2366,29 @@ if __name__ == "__main__":
     # Calculate starting similarity (needed for all paths)
     starting_seqsim = float(F.cosine_similarity(orig_mean_embedding, target_mean_embedding).cpu().numpy())
 
+    # Process reference sequences if provided
+    reference_seqs = None
+    if args.reference_fasta:
+        reference_seqs = {}
+        with open(args.reference_fasta, "r") as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                # Tokenize sequence
+                tokens = tokenizer(" ".join(str(record.seq)), 
+                                 return_tensors="pt", 
+                                 padding=True, 
+                                 truncation=True).to(device)
+                
+                # Get similarity score
+                with torch.no_grad():
+                    ref_embedding = get_representation(model, 
+                                                     tokens["input_ids"], 
+                                                     model_type, 
+                                                     layers=[-1], 
+                                                     output_attentions=False)
+                    sim_score = F.cosine_similarity(ref_embedding, 
+                                                  target_mean_embedding).item()
+                reference_seqs[record.id] = sim_score
+
     # Setup mutations
     possible_mutations, pos1, pos2 = generate_differences_and_positions(alignment[-1], alignment[0])
     print(possible_mutations, pos1, pos2)
@@ -2327,8 +2396,14 @@ if __name__ == "__main__":
     # PATHWAY 1: Run everything from scratch
     if not args.step_log and not args.pathway_file:
         print("\nRunning new trials...")
-        env = ProteinMutationEnv(orig_ids.squeeze(), target_ids.squeeze(), possible_mutations, 
-                                model, tokenizer, device)
+        env = ProteinMutationEnv(orig_ids.squeeze(), 
+                                target_ids.squeeze(), 
+                                possible_mutations, 
+                                model, 
+                                tokenizer, 
+                                device,
+                                baseline_reward=args.baseline_reward,  # Add this parameter
+                                starting_seqsim=starting_seqsim)  # Add this parameter
         tracker = ActionValueTracker(starting_seqsim=starting_seqsim)
         step_log = train_markov_episodes(env, args.episodes, tracker, possible_mutations)
         
@@ -2440,7 +2515,7 @@ if __name__ == "__main__":
         )
         
         # Create three-panel plot including beam search results
-        plot_mutation_phases(step_log, pathway_df, output_dir, original_seqsims, iteration_results)
+        plot_mutation_phases(step_log, pathway_df, output_dir, original_seqsims, iteration_results, reference_seqs=reference_seqs)  # Make sure reference_seqs is being passed
         
         # Save iteration results
         iteration_df = pd.DataFrame([{
